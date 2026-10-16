@@ -2,10 +2,9 @@
 
 Maintained TypeScript SDK: `@likenttt/garmin-connect@1.7.0` from
 [Likenttt/garmin-connect](https://github.com/Likenttt/garmin-connect).
-The DSH plugin consumes this repository at an immutable Git commit, installed
-under its existing `garmin-connect` dependency key. The scoped package has not
-been published to npm. Git installs run `prepare` to build the bundled JavaScript
-and public declarations from the TypeScript sources.
+Version 1.7.0 is published on [official npm](https://www.npmjs.com/package/@likenttt/garmin-connect).
+Install the scoped package directly, or use the npm alias below to preserve
+existing `garmin-connect` imports in DSH and other integrations.
 
 ## Recovery APIs in this fork
 
@@ -131,8 +130,8 @@ saved through the DSH plugin's DI runtime, which bridged authentication into the
 SDK. See the [sanitized validation report](docs/testing/session-validation-2026-10-08.md).
 
 These checks cover the two selected accounts and dates. Native SDK DI session
-support, broader device coverage and the DSH dependency switch remain separate
-work. This fork's new APIs have not been published to npm.
+support and broader device coverage remain separate work. All 13 new APIs are
+included in the published `@likenttt/garmin-connect@1.7.0` package.
 
 ## v1.6.0 refactor
 
@@ -174,17 +173,26 @@ This library will require you to add a configuration file to your project root c
 
 ## How to install
 
-Use the tested 40-character commit recorded by the consuming plugin's lockfile
-in place of `<commit-sha>`:
+Install the maintained release from the official npm registry:
 
 ```shell
-$ npm install 'garmin-connect@git+https://github.com/Likenttt/garmin-connect.git#<commit-sha>'
+$ npm install --save-exact @likenttt/garmin-connect@1.7.0 --registry=https://registry.npmjs.org/
 ```
+
+To keep existing `require('garmin-connect')` or `from 'garmin-connect'` imports,
+install the same release under the historical dependency name with an npm alias:
+
+```shell
+$ npm install --save-exact garmin-connect@npm:@likenttt/garmin-connect@1.7.0 --registry=https://registry.npmjs.org/
+```
+
+Choose the installation form matching your imports. The examples below use the
+scoped package; alias consumers can keep their existing `garmin-connect` import.
 
 ## How to use
 
 ```js
-const { GarminConnect } = require('garmin-connect');
+const { GarminConnect } = require('@likenttt/garmin-connect');
 // Create a new Garmin Connect Client
 const GCClient = new GarminConnect({
     username: 'my.email@example.com',
