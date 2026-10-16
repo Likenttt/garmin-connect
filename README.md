@@ -1,4 +1,138 @@
-# garmin-connect
+# @likenttt/garmin-connect
+
+Maintained TypeScript SDK: `@likenttt/garmin-connect@1.7.0` from
+[Likenttt/garmin-connect](https://github.com/Likenttt/garmin-connect).
+The DSH plugin consumes this repository at an immutable Git commit, installed
+under its existing `garmin-connect` dependency key. The scoped package has not
+been published to npm. Git installs run `prepare` to build the bundled JavaScript
+and public declarations from the TypeScript sources.
+
+## Recovery APIs in this fork
+
+Development is maintained in [Likenttt/garmin-connect](https://github.com/Likenttt/garmin-connect).
+Use this maintained fork for the following new methods:
+
+| Method                                   | Data returned                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------- |
+| `getHrvData(date?)`                      | HRV nightly summary, personal baseline, seven-day average and overnight readings |
+| `getHrvSummaries(startDate, endDate)`    | Native inclusive date-range response, including `hrvSummaries`                   |
+| `getStressData(date?)`                   | Full daily stress data and its time series                                       |
+| `getStressSummaries(startDate, endDate)` | Daily stress summaries, preserving each entry's `values` object                  |
+| `getBodyBattery(startDate?, endDate?)`   | Daily Body Battery reports and time series; end defaults to start                |
+| `getTrainingReadiness(date?)`            | All readiness snapshots and recovery factors for the requested day               |
+
+Dates accept either a strict `YYYY-MM-DD` string or a `Date` interpreted in the
+machine's local timezone. Omitted daily dates default to today. Both range
+endpoints include the start and end dates. Invalid calendar dates and reversed
+ranges fail before sending a request. For historical data, date-only strings
+avoid unintended timezone conversion.
+
+```js
+// With an authenticated GCClient (see the session examples below):
+const hrv = await GCClient.getHrvData('2026-10-08');
+const hrvHistory = await GCClient.getHrvSummaries('2026-10-01', '2026-10-08');
+const stress = await GCClient.getStressData('2026-10-08');
+const stressHistory = await GCClient.getStressSummaries(
+    '2026-10-01',
+    '2026-10-08'
+);
+const bodyBattery = await GCClient.getBodyBattery('2026-10-01', '2026-10-08');
+const readiness = await GCClient.getTrainingReadiness('2026-10-08');
+```
+
+The methods use the client's configured `garmin.com` or `garmin.cn` API host.
+They preserve raw response fields, zero values, missing baselines, sentinel
+values and complete readings. Successful no-content responses become `null`;
+empty arrays and objects remain unchanged. HTTP failures are rejected with the
+original client error, including its status. Training readiness usually returns
+an array; an object response is also retained as received. `recoveryTime` is in
+minutes.
+
+The new response types, including `HrvData`, `HrvSummaries`, `StressData`,
+`BodyBatteryData`, `TrainingReadinessData` and `GarminDate`, are exported from the
+package entry point. Fields are optional and nullable because device support,
+sync state and available recording history differ. Date-range HRV summaries do
+not contain all nightly readings; use `getHrvData` for those readings.
+
+See the [source comparison and next API priorities](docs/research/python-garmin-api-gaps-2026-10-08.md)
+for pinned Python source references, response evidence and remaining gaps.
+
+## Training analysis APIs in this fork
+
+| Method                                                  | Data returned                                                               |
+| ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `getDailyTrainingStatus(date?)`                         | Daily training status, acute/chronic load and ACWR for all returned devices |
+| `getTrainingStatus(date?)`                              | Aggregated training status, without reshaping the response                  |
+| `getTrainingLoadBalance(date?)`                         | Four-week training load balance ending on the selected date                 |
+| `getMaxMetrics(date?)`                                  | Raw max metrics, including VO2 max, using a same-day range                  |
+| `getMaxMetricsRange(startDate, endDate)`                | Native date-range max metrics                                               |
+| `getRacePredictions(options?)`                          | Latest race predictions for the selected profile                            |
+| `getRacePredictionsRange(startDate, endDate, options?)` | Native daily or monthly prediction history                                  |
+
+```js
+const dailyStatus = await GCClient.getDailyTrainingStatus('2026-10-08');
+const status = await GCClient.getTrainingStatus('2026-10-08');
+const loadBalance = await GCClient.getTrainingLoadBalance('2026-10-08');
+const maxMetrics = await GCClient.getMaxMetrics('2026-10-08');
+const maxMetricsHistory = await GCClient.getMaxMetricsRange(
+    '2026-10-01',
+    '2026-10-08'
+);
+const predictions = await GCClient.getRacePredictions();
+const predictionHistory = await GCClient.getRacePredictionsRange(
+    '2026-09-01',
+    '2026-10-08',
+    { aggregation: 'monthly' }
+);
+```
+
+Dates and successful empty responses follow the recovery API rules above.
+Race history defaults to `aggregation: 'daily'`; it accepts only `daily` or
+`monthly`. Its start-to-end calendar-date difference must be at most 366 days,
+matching the Python client's guard. This is a client limit, rather than a
+verified server limit; a 366-day difference includes 367 calendar dates.
+The calculation is independent of daylight saving time.
+
+Race methods read the current profile's `socialProfile.displayName` on each
+query. To skip that additional profile request, supply `{ displayName: '...' }`
+in either method's options. This is the internal profile identifier, not an
+email address or a user-defined account alias. It is encoded as one URL path
+segment. Invalid options, dates, names and ranges are rejected before any
+request. Resolving the profile on each query avoids retaining an identifier
+from a previous account after credentials or an external session change.
+
+The raw responses retain every device and unknown field. The exported
+`DailyTrainingStatusData` and `TrainingLoadBalanceData` have optional device
+maps supported by endpoint-labelled payloads in public recordings. The
+`TrainingStatusData`, `MaxMetricsData` and `RacePredictionsData` types remain
+open object-or-array shapes; live checks confirmed some root fields, while
+nested schemas and device variations still need broader evidence.
+See the [training API source investigation](docs/research/training-metrics-apis-2026-10-08.md)
+for the evidence and its limits.
+
+## Tests and session validation
+
+```sh
+npm ci --registry=https://registry.npmjs.org/
+npm test
+```
+
+All 59 unit tests and the strict TypeScript consumer declaration check pass.
+The offline tests use synthetic fixtures, an Axios adapter and temporary token
+files; no credentials or network access are required. Coverage includes calendar
+and timezone boundaries, request contracts, profile changes, isolated token
+refreshes, retry limits, refresh failures and token file validation/permissions.
+
+Existing local sessions were also used for separate read-only checks: one
+China-region account and one global account each called all 13 new APIs for
+`2026-10-07` and the range `2026-10-01` to `2026-10-07`. All 26 calls completed
+successfully, including normal empty results. Both sessions were refreshed and
+saved through the DSH plugin's DI runtime, which bridged authentication into the
+SDK. See the [sanitized validation report](docs/testing/session-validation-2026-10-08.md).
+
+These checks cover the two selected accounts and dates. Native SDK DI session
+support, broader device coverage and the DSH dependency switch remain separate
+work. This fork's new APIs have not been published to npm.
 
 ## v1.6.0 refactor
 
@@ -14,7 +148,7 @@ TODO:
 -   [ ] Implementation of other methods, such as Badge,Workout,Gear etc
 -   [ ] Handle MFA
 -   [x] Handle Account locked
--   [ ] Unit test
+-   [x] Unit tests for recovery/training APIs, token refresh and token files
 -   [ ] Listeners
 
 If something is not working, please check [https://connect.garmin.com/status/](https://connect.garmin.com/status/) first.

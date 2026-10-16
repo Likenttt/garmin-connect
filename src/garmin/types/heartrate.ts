@@ -8,7 +8,7 @@ interface HeartRateEntry {
     heartrate: number;
 }
 
-interface HeartRate {
+export interface HeartRate {
     userProfilePK: number;
     calendarDate: string;
     startTimestampGMT: string;

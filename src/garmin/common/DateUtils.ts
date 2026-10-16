@@ -5,6 +5,66 @@ export function toDateString(date: Date) {
     return dateString;
 }
 
+export type GarminDate = Date | string;
+
+/** Resolve a local calendar date without interpreting date-only strings as UTC. */
+export function toCalendarDate(date: GarminDate): string {
+    const value =
+        typeof date === 'string'
+            ? date
+            : date instanceof Date && !isNaN(date.getTime())
+            ? toDateString(date)
+            : '';
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        throw new RangeError(
+            'Expected a valid calendar date in YYYY-MM-DD format.'
+        );
+    }
+
+    const [year, month, day] = value.split('-').map(Number);
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [
+        31,
+        leapYear ? 29 : 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31
+    ];
+    if (
+        year < 1 ||
+        month < 1 ||
+        month > 12 ||
+        day < 1 ||
+        day > daysInMonth[month - 1]
+    ) {
+        throw new RangeError(
+            'Expected a valid calendar date in YYYY-MM-DD format.'
+        );
+    }
+
+    return value;
+}
+
+export function toCalendarDateRange(
+    startDate: GarminDate,
+    endDate: GarminDate
+): { startDate: string; endDate: string } {
+    const start = toCalendarDate(startDate);
+    const end = toCalendarDate(endDate);
+    if (start > end) {
+        throw new RangeError('startDate must be on or before endDate.');
+    }
+    return { startDate: start, endDate: end };
+}
+
 export function calculateTimeDifference(
     sleepStartTimestampGMT: number,
     sleepEndTimestampGMT: number

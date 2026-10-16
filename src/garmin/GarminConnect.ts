@@ -1,4 +1,5 @@
 import appRoot from 'app-root-path';
+import { AxiosRequestConfig } from 'axios';
 
 import FormData from 'form-data';
 import _ from 'lodash';
@@ -27,10 +28,33 @@ import {
 import Running from './workouts/Running';
 import {
     calculateTimeDifference,
+    GarminDate,
     getLocalTimestamp,
+    toCalendarDate,
+    toCalendarDateRange,
     toDateString
 } from './common/DateUtils';
 import { SleepData } from './types/sleep';
+import { HeartRate } from './types/heartrate';
+import { UpdateWeight, WeightData } from './types/weight';
+import { HydrationData, WaterIntake } from './types/hydration';
+import { GolfScorecard, GolfSummary } from './types/golf';
+import { HrvData, HrvSummaries } from './types/hrv';
+import {
+    BodyBatteryData,
+    StressData,
+    StressSummary,
+    TrainingReadinessData
+} from './types/recovery';
+import {
+    DailyTrainingStatusData,
+    MaxMetricsData,
+    RacePredictionOptions,
+    RacePredictionRangeOptions,
+    RacePredictionsData,
+    TrainingLoadBalanceData,
+    TrainingStatusData
+} from './types/training';
 import { gramsToPounds } from './common/WeightUtils';
 import { convertMLToOunces, convertOuncesToML } from './common/HydrationUtils';
 import {
@@ -97,43 +121,46 @@ export default class GarminConnect {
         return this;
     }
     exportTokenToFile(dirPath: string): void {
+        const tokens = this.exportToken();
+        const oauth1Data = JSON.stringify(tokens.oauth1);
+        const oauth2Data = JSON.stringify(tokens.oauth2);
         if (!checkIsDirectory(dirPath)) {
-            createDirectory(dirPath);
+            fs.mkdirSync(dirPath, { mode: 0o700 });
         }
-        // save oauth1 to json
-        if (this.client.oauth1Token) {
-            writeToFile(
-                path.join(dirPath, 'oauth1_token.json'),
-                JSON.stringify(this.client.oauth1Token)
-            );
-        }
-        if (this.client.oauth2Token) {
-            writeToFile(
-                path.join(dirPath, 'oauth2_token.json'),
-                JSON.stringify(this.client.oauth2Token)
-            );
-        }
+        this.writeTokenFile(
+            path.join(dirPath, 'oauth1_token.json'),
+            oauth1Data
+        );
+        this.writeTokenFile(
+            path.join(dirPath, 'oauth2_token.json'),
+            oauth2Data
+        );
     }
     loadTokenByFile(dirPath: string): void {
         if (!checkIsDirectory(dirPath)) {
             throw new Error('loadTokenByFile: Directory not found: ' + dirPath);
         }
-        let oauth1Data = fs.readFileSync(
-            path.join(dirPath, 'oauth1_token.json')
-        ) as unknown as string;
+        const oauth1Data = fs.readFileSync(
+            path.join(dirPath, 'oauth1_token.json'),
+            'utf8'
+        );
         const oauth1 = JSON.parse(oauth1Data);
-        this.client.oauth1Token = oauth1;
-
-        let oauth2Data = fs.readFileSync(
-            path.join(dirPath, 'oauth2_token.json')
-        ) as unknown as string;
+        const oauth2Data = fs.readFileSync(
+            path.join(dirPath, 'oauth2_token.json'),
+            'utf8'
+        );
         const oauth2 = JSON.parse(oauth2Data);
-        this.client.oauth2Token = oauth2;
+        // Both reads, parses and validation must succeed before switching tokens.
+        this.loadToken(oauth1, oauth2);
     }
     exportToken(): IGarminTokens {
         if (!this.client.oauth1Token || !this.client.oauth2Token) {
             throw new Error('exportToken: Token not found');
         }
+        this.validateTokenPair(
+            this.client.oauth1Token,
+            this.client.oauth2Token
+        );
         return {
             oauth1: this.client.oauth1Token,
             oauth2: this.client.oauth2Token
@@ -141,8 +168,47 @@ export default class GarminConnect {
     }
     // from db or localstorage etc
     loadToken(oauth1: IOauth1Token, oauth2: IOauth2Token): void {
+        this.validateTokenPair(oauth1, oauth2);
         this.client.oauth1Token = oauth1;
         this.client.oauth2Token = oauth2;
+    }
+
+    private validateTokenPair(
+        oauth1: IOauth1Token,
+        oauth2: IOauth2Token
+    ): void {
+        if (
+            !oauth1 ||
+            typeof oauth1 !== 'object' ||
+            Array.isArray(oauth1) ||
+            typeof oauth1.oauth_token !== 'string' ||
+            !oauth1.oauth_token.trim() ||
+            typeof oauth1.oauth_token_secret !== 'string' ||
+            !oauth1.oauth_token_secret.trim()
+        ) {
+            throw new Error('Invalid OAuth1 token');
+        }
+        if (
+            !oauth2 ||
+            typeof oauth2 !== 'object' ||
+            Array.isArray(oauth2) ||
+            typeof oauth2.access_token !== 'string' ||
+            !oauth2.access_token.trim()
+        ) {
+            throw new Error('Invalid OAuth2 token');
+        }
+    }
+
+    private writeTokenFile(filePath: string, data: string): void {
+        const descriptor = fs.openSync(filePath, 'w', 0o600);
+        try {
+            // Existing token files may have broader permissions. Tighten them
+            // before writing credentials without changing shared directories.
+            fs.fchmodSync(descriptor, 0o600);
+            fs.writeFileSync(descriptor, data, 'utf8');
+        } finally {
+            fs.closeSync(descriptor);
+        }
     }
 
     async getUserSettings(): Promise<IUserSettings> {
@@ -533,6 +599,205 @@ export default class GarminConnect {
         } catch (error: any) {
             throw new Error(`Error in getHeartRate: ${error.message}`);
         }
+    }
+
+    /** HRV summary, baseline and all overnight readings, without filtering. */
+    async getHrvData(date: GarminDate = new Date()): Promise<HrvData | null> {
+        return this.getOptionalData<HrvData>(
+            `${this.url.HRV}/${toCalendarDate(date)}`
+        );
+    }
+
+    /** Native inclusive date-range summaries; this does not fetch nightly readings. */
+    async getHrvSummaries(
+        startDate: GarminDate,
+        endDate: GarminDate
+    ): Promise<HrvSummaries | null> {
+        const dates = toCalendarDateRange(startDate, endDate);
+        return this.getOptionalData<HrvSummaries>(
+            `${this.url.DAILY_HRV}/${dates.startDate}/${dates.endDate}`
+        );
+    }
+
+    async getStressData(
+        date: GarminDate = new Date()
+    ): Promise<StressData | null> {
+        return this.getOptionalData<StressData>(
+            `${this.url.DAILY_STRESS}/${toCalendarDate(date)}`
+        );
+    }
+
+    async getStressSummaries(
+        startDate: GarminDate,
+        endDate: GarminDate
+    ): Promise<StressSummary[] | null> {
+        const dates = toCalendarDateRange(startDate, endDate);
+        return this.getOptionalData<StressSummary[]>(
+            `${this.url.STRESS_SUMMARIES}/${dates.startDate}/${dates.endDate}`
+        );
+    }
+
+    /** All daily reports, including their original Body Battery time series. */
+    async getBodyBattery(
+        startDate: GarminDate = new Date(),
+        endDate: GarminDate = startDate
+    ): Promise<BodyBatteryData[] | null> {
+        const dates = toCalendarDateRange(startDate, endDate);
+        return this.getOptionalData<BodyBatteryData[]>(this.url.BODY_BATTERY, {
+            params: dates
+        });
+    }
+
+    /** Keep every readiness snapshot and its recovery factors. */
+    async getTrainingReadiness(
+        date: GarminDate = new Date()
+    ): Promise<TrainingReadinessData | null> {
+        return this.getOptionalData<TrainingReadinessData>(
+            `${this.url.TRAINING_READINESS}/${toCalendarDate(date)}`
+        );
+    }
+
+    /** Daily status, including acute/chronic load and all returned devices. */
+    async getDailyTrainingStatus(
+        date: GarminDate = new Date()
+    ): Promise<DailyTrainingStatusData | null> {
+        return this.getOptionalData<DailyTrainingStatusData>(
+            `${this.url.DAILY_TRAINING_STATUS}/${toCalendarDate(date)}`
+        );
+    }
+
+    async getTrainingStatus(
+        date: GarminDate = new Date()
+    ): Promise<TrainingStatusData | null> {
+        return this.getOptionalData<TrainingStatusData>(
+            `${this.url.TRAINING_STATUS}/${toCalendarDate(date)}`
+        );
+    }
+
+    /** Four-week balance ending on the selected calendar date. */
+    async getTrainingLoadBalance(
+        date: GarminDate = new Date()
+    ): Promise<TrainingLoadBalanceData | null> {
+        return this.getOptionalData<TrainingLoadBalanceData>(
+            `${this.url.TRAINING_LOAD_BALANCE}/${toCalendarDate(date)}`
+        );
+    }
+
+    /** Max metrics (including VO2 max); preserve the service's response envelope. */
+    async getMaxMetrics(
+        date: GarminDate = new Date()
+    ): Promise<MaxMetricsData | null> {
+        const calendarDate = toCalendarDate(date);
+        return this.getOptionalData<MaxMetricsData>(
+            `${this.url.MAX_METRICS}/${calendarDate}/${calendarDate}`
+        );
+    }
+
+    async getMaxMetricsRange(
+        startDate: GarminDate,
+        endDate: GarminDate
+    ): Promise<MaxMetricsData | null> {
+        const dates = toCalendarDateRange(startDate, endDate);
+        return this.getOptionalData<MaxMetricsData>(
+            `${this.url.MAX_METRICS}/${dates.startDate}/${dates.endDate}`
+        );
+    }
+
+    async getRacePredictions(
+        options: RacePredictionOptions = {}
+    ): Promise<RacePredictionsData | null> {
+        this.validateRacePredictionOptions(options);
+        const displayName = await this.resolveRaceDisplayName(
+            options.displayName
+        );
+        return this.getOptionalData<RacePredictionsData>(
+            `${this.url.RACE_PREDICTIONS}/latest/${encodeURIComponent(
+                displayName
+            )}`
+        );
+    }
+
+    async getRacePredictionsRange(
+        startDate: GarminDate,
+        endDate: GarminDate,
+        options: RacePredictionRangeOptions = {}
+    ): Promise<RacePredictionsData | null> {
+        this.validateRacePredictionOptions(options);
+        const dates = toCalendarDateRange(startDate, endDate);
+        const aggregation =
+            options.aggregation === undefined ? 'daily' : options.aggregation;
+        if (aggregation !== 'daily' && aggregation !== 'monthly') {
+            throw new RangeError(
+                'Race prediction aggregation must be daily or monthly.'
+            );
+        }
+        // Match the Python client's 366-day span check, independently of local DST.
+        const spanDays =
+            (Date.parse(`${dates.endDate}T00:00:00.000Z`) -
+                Date.parse(`${dates.startDate}T00:00:00.000Z`)) /
+            86400000;
+        if (spanDays > 366) {
+            throw new RangeError(
+                'Race prediction ranges must span no more than 366 days.'
+            );
+        }
+        const displayName = await this.resolveRaceDisplayName(
+            options.displayName
+        );
+        return this.getOptionalData<RacePredictionsData>(
+            `${this.url.RACE_PREDICTIONS}/${aggregation}/${encodeURIComponent(
+                displayName
+            )}`,
+            {
+                params: {
+                    fromCalendarDate: dates.startDate,
+                    toCalendarDate: dates.endDate
+                }
+            }
+        );
+    }
+
+    private validateRacePredictionOptions(
+        options: RacePredictionOptions
+    ): void {
+        if (!options || typeof options !== 'object' || Array.isArray(options)) {
+            throw new TypeError('Race prediction options must be an object.');
+        }
+        if (options.displayName !== undefined) {
+            this.validateRaceDisplayName(options.displayName);
+        }
+    }
+
+    private validateRaceDisplayName(displayName: unknown): string {
+        if (typeof displayName !== 'string' || !displayName.trim()) {
+            throw new RangeError(
+                'Expected a non-empty Garmin profile displayName.'
+            );
+        }
+        return displayName;
+    }
+
+    private async resolveRaceDisplayName(
+        displayName?: GCUserHash
+    ): Promise<string> {
+        if (displayName !== undefined) {
+            return displayName;
+        }
+        // Resolve the current profile each time; external session replacement can change accounts.
+        const profile = await this.getUserProfile();
+        return this.validateRaceDisplayName(profile?.displayName);
+    }
+
+    private async getOptionalData<T>(
+        url: string,
+        config?: AxiosRequestConfig
+    ): Promise<T | null> {
+        const data = await this.client.get<T | null | undefined | ''>(
+            url,
+            config
+        );
+        // Normalize successful empty responses only; let HTTP errors propagate intact.
+        return data === null || data === undefined || data === '' ? null : data;
     }
 
     async get<T>(url: string, data?: any) {

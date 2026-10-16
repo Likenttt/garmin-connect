@@ -1,21 +1,24 @@
 {
-    "name": "garmin-connect",
-    "version": "1.6.2",
+    "name": "@likenttt/garmin-connect",
+    "version": "1.7.0",
     "description": "Makes it simple to interface with Garmin Connect to get or set any data point",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "scripts": {
-        "build": "tsc --build --clean && find ./dist -type d -empty -delete; tsc",
-        "build:windows": "tsc --build --clean && tsc",
+        "test": "npm run build && node --test tests/health-recovery.test.js tests/training-metrics.test.js tests/http-client.test.js tests/calendar-contract.test.js tests/session-token.test.js && npm run test:types",
+        "test:types": "tsc --project tests/tsconfig.types.json",
+        "build": "tsc --build --clean && tsc",
+        "build:windows": "npm run build",
         "build:watch": "npm run build -- --watch",
         "build:watch-windows": "npm run build:windows -- --watch",
         "prettier:all": "prettier --write .",
         "pretty": "pretty-quick --staged",
-        "prepack": "npm run build"
+        "prepack": "npm run build",
+        "prepare": "npm run build"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/Pythe1337N/garmin-connect.git"
+        "url": "git+https://github.com/Likenttt/garmin-connect.git"
     },
     "keywords": [
         "garmin",
@@ -47,9 +50,13 @@
         "pretty-quick": "^3.1.3",
         "typescript": "^4.9.4"
     },
-    "homepage": "https://github.com/Pythe1337N/garmin-connect#readme",
+    "homepage": "https://github.com/Likenttt/garmin-connect#readme",
     "bugs": {
-        "url": "https://github.com/Pythe1337N/garmin-connect/issues"
+        "url": "https://github.com/Likenttt/garmin-connect/issues"
+    },
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/"
     },
     "runkitExampleFilename": "./examples/example.js",
     "dependencies": {

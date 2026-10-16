@@ -29,9 +29,11 @@ const USER_AGENT_BROWSER =
 
 const OAUTH_CONSUMER_URL =
     'https://thegarth.s3.amazonaws.com/oauth_consumer.json';
-//  refresh token
-let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
+
+type RetryableRequestConfig = AxiosRequestConfig & {
+    _retry?: boolean;
+    _skipOauthRefresh?: boolean;
+};
 
 export class HttpClient {
     client: AxiosInstance;
@@ -39,6 +41,7 @@ export class HttpClient {
     oauth1Token: IOauth1Token | undefined;
     oauth2Token: IOauth2Token | undefined;
     OAUTH_CONSUMER: IOauth1Consumer | undefined;
+    private refreshPromise: Promise<string> | undefined;
 
     constructor(url: UrlClass) {
         this.url = url;
@@ -46,58 +49,33 @@ export class HttpClient {
         this.client.interceptors.response.use(
             (response) => response,
             async (error) => {
-                const originalRequest = error.config;
-                // console.log('originalRequest:', originalRequest)
-                // Auto Refresh token
+                const originalRequest = error?.config as
+                    | RetryableRequestConfig
+                    | undefined;
                 if (
                     error?.response?.status === 401 &&
-                    !originalRequest?._retry
+                    originalRequest &&
+                    !originalRequest._retry &&
+                    !originalRequest._skipOauthRefresh
                 ) {
-                    if (!this.oauth2Token) {
-                        return;
+                    if (!this.oauth2Token && !this.refreshPromise) {
+                        throw error;
                     }
-                    if (isRefreshing) {
-                        try {
-                            const token = await new Promise<string>(
-                                (resolve) => {
-                                    refreshSubscribers.push((token) => {
-                                        resolve(token);
-                                    });
-                                }
-                            );
-                            originalRequest.headers.Authorization = `Bearer ${token}`;
-                            return this.client(originalRequest);
-                        } catch (err) {
-                            console.log('err:', err);
-                            return Promise.reject(err);
-                        }
-                    }
-
+                    // Every caller, including callers waiting on an existing
+                    // refresh, gets at most one retry for this request.
                     originalRequest._retry = true;
-                    isRefreshing = true;
-                    console.log('interceptors: refreshOauth2Token start');
-                    await this.refreshOauth2Token();
-                    console.log('interceptors: refreshOauth2Token end');
-                    isRefreshing = false;
-                    refreshSubscribers.forEach((subscriber) =>
-                        subscriber(this.oauth2Token!.access_token)
-                    );
-                    refreshSubscribers = [];
-                    originalRequest.headers.Authorization = `Bearer ${
-                        this.oauth2Token!.access_token
-                    }`;
+                    const token = await this.getRefreshedAccessToken();
+                    originalRequest.headers = originalRequest.headers || {};
+                    originalRequest.headers.Authorization = `Bearer ${token}`;
                     return this.client(originalRequest);
-                }
-                if (axios.isAxiosError(error)) {
-                    if (error?.response) this.handleError(error?.response);
                 }
                 throw error;
             }
         );
         this.client.interceptors.request.use(async (config) => {
-            if (this.oauth2Token) {
-                config.headers.Authorization =
-                    'Bearer ' + this.oauth2Token.access_token;
+            const token = this.oauth2Token?.access_token;
+            if (typeof token === 'string' && token.trim()) {
+                config.headers.Authorization = 'Bearer ' + token;
             }
             return config;
         });
@@ -112,10 +90,36 @@ export class HttpClient {
     }
 
     async checkTokenVaild() {
-        if (this.oauth2Token) {
-            if (this.oauth2Token.expires_at < DateTime.now().toSeconds()) {
-                console.error('Token expired!');
+        if (
+            this.refreshPromise ||
+            (this.oauth2Token &&
+                this.oauth2Token.expires_at < DateTime.now().toSeconds())
+        ) {
+            await this.getRefreshedAccessToken();
+        }
+    }
+
+    private async getRefreshedAccessToken(): Promise<string> {
+        if (!this.refreshPromise) {
+            // Start after assigning the promise so synchronous failures also
+            // release the lock. A refresh belongs only to this account/client.
+            this.refreshPromise = Promise.resolve().then(async () => {
                 await this.refreshOauth2Token();
+                const token = this.oauth2Token?.access_token;
+                if (typeof token !== 'string' || !token.trim()) {
+                    throw new Error(
+                        'OAuth2 token refresh did not return an access token'
+                    );
+                }
+                return token;
+            });
+        }
+        const refresh = this.refreshPromise;
+        try {
+            return await refresh;
+        } finally {
+            if (this.refreshPromise === refresh) {
+                this.refreshPromise = undefined;
             }
         }
     }
@@ -311,7 +315,6 @@ export class HttpClient {
             token: this.oauth1Token
         };
         await this.exchange(oauth1);
-        console.log('Oauth2 token refreshed!');
     }
 
     async getOauth1Token(ticket: string): Promise<IOauth1> {
@@ -381,15 +384,24 @@ export class HttpClient {
         // console.log('login - step5AuthData:', step5AuthData);
         const url = `${baseUrl}?${qs.stringify(step5AuthData)}`;
         // console.log('exchange - url:', url);
+        const previousToken = this.oauth2Token;
         this.oauth2Token = undefined;
-        const response = await this.post<IOauth2Token>(url, null, {
+        const config: RetryableRequestConfig = {
+            // The exchange itself cannot wait on the refresh it is executing.
+            _skipOauthRefresh: true,
             headers: {
                 'User-Agent': USER_AGENT_CONNECTMOBILE,
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
-        });
-        // console.log('exchange - response:', response);
-        this.oauth2Token = this.setOauth2TokenExpiresAt(response);
+        };
+        try {
+            const response = await this.post<IOauth2Token>(url, null, config);
+            this.oauth2Token = this.setOauth2TokenExpiresAt(response);
+        } catch (error) {
+            // Preserve credentials so a transient refresh failure can be retried.
+            if (!this.oauth2Token) this.oauth2Token = previousToken;
+            throw error;
+        }
         // console.log('exchange - oauth2Token:', this.oauth2Token);
     }
 
