@@ -174,8 +174,11 @@ This library will require you to add a configuration file to your project root c
 
 ## How to install
 
+Use the tested 40-character commit recorded by the consuming plugin's lockfile
+in place of `<commit-sha>`:
+
 ```shell
-$ npm install garmin-connect
+$ npm install 'garmin-connect@git+https://github.com/Likenttt/garmin-connect.git#<commit-sha>'
 ```
 
 ## How to use
